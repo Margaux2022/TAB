@@ -11,7 +11,12 @@ class DUETModel(nn.Module):
         self.cluster = Linear_extractor_cluster(config)
         self.CI = config.CI
         self.n_vars = config.enc_in
+        self.spatial_clusters = getattr(config, "spatial_clusters", 0)
         self.mask_generator = Mahalanobis_mask(config.seq_len)
+        if self.spatial_clusters and self.spatial_clusters > 0:
+            self.spatial_prototypes = nn.Parameter(
+                torch.randn(self.spatial_clusters, config.d_model)
+            )
         self.Channel_transformer = Encoder(
             [
                 EncoderLayer(
@@ -51,6 +56,17 @@ class DUETModel(nn.Module):
 
         # B x d_model x n_vars -> B x n_vars x d_model
         temporal_feature = rearrange(temporal_feature, 'b d n -> b n d')
+        if self.spatial_clusters and self.spatial_clusters > 0 and self.n_vars > 1:
+            spatial_logits = torch.einsum(
+                'bnd,kd->bnk', temporal_feature, self.spatial_prototypes
+            )
+            spatial_probs = torch.softmax(spatial_logits, dim=-1)
+            spatial_cluster_feature = torch.einsum(
+                'bnk,bnd->bkd', spatial_probs, temporal_feature
+            )
+            temporal_feature = torch.einsum(
+                'bnk,bkd->bnd', spatial_probs, spatial_cluster_feature
+            )
         if self.n_vars > 1:
             changed_input = rearrange(input, 'b l n -> b n l')
             channel_mask = self.mask_generator(changed_input)
